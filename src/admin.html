@@ -1,0 +1,417 @@
+<!doctype html>
+<html lang="en">
+<head>
+<base target="_top">
+<meta charset="utf-8">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Outfit:wght@500;600&display=swap">
+<style>
+/*__CSS__*/
+.sec-h{margin:22px 20px 8px;font-size:13px;font-weight:600;color:#1E4A40}.sec-h.amber{color:#7A4206}
+.nav{position:sticky;bottom:0;background:#fff;border-top:1px solid #D5DEDA;padding:8px 12px 14px;display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:2px;margin-top:auto;z-index:5}
+.nav button{min-height:52px;border-radius:12px;border:none;background:none;font:500 13px Inter,sans-serif;color:#16211E;cursor:pointer;padding:0 2px}
+.nav button.on{background:#E3EEE9;color:#1E4A40;font-weight:600}
+.ocard{margin:0 20px 10px}.ocard.hot{border-color:#F0D9B0}
+.tile{background:#fff;border:1px solid #E3E9E6;border-radius:14px;padding:12px}
+.tile b{display:block;font:600 20px/26px Outfit,sans-serif}
+</style>
+</head>
+<body>
+<div id="app"></div>
+<div id="toast" role="status"></div>
+<div id="busy"><div></div></div>
+<script>
+/*__QR__*/
+</script>
+<script>
+/*__COMMON__*/
+var BOOT = "__BOOT__";
+var app = document.getElementById('app');
+var session = keep('ll_admin') || '';
+var D = null, tab = BOOT.tab || 'orders', focusOrder = BOOT.order || '', stats = null, stockTimers = {};
+
+function signOut() { session = ''; keep('ll_admin', null); D = null; render(); }
+function api(fn, args, ok, quiet) {
+  call(fn, [session].concat(args || []), ok, { quiet: quiet, fail: function (m) { if (m.indexOf('SIGNIN') >= 0) { signOut(); toast('Please enter your PIN again.'); return true; } return false; } });
+}
+function act(fn, args, done) { api(fn, args, function (d) { D = d; render(); if (done) done(); }); }
+function render() {
+  app.textContent = '';
+  var v = !D ? viewLogin() : (tab === 'products' ? viewProducts() : tab === 'reviews' ? viewReviews() : tab === 'sales' ? viewSales() : viewOrders());
+  v.forEach(function (n) { if (n) app.appendChild(n); });
+  if (D) app.appendChild(nav());
+  if (D && focusOrder && tab === 'orders') { var el = document.getElementById('o-' + focusOrder); focusOrder = ''; if (el) el.scrollIntoView(); }
+}
+function upiLink(amount, note) {
+  return 'upi://pay?pa=' + encodeURIComponent(D.store.upiId) + '&pn=' + encodeURIComponent(D.store.upiName) + '&am=' + Number(amount).toFixed(2) + '&cu=INR&tn=' + encodeURIComponent(note);
+}
+
+/* ------------------------------------------------------------------ login */
+function viewLogin() {
+  var pin = h('input', { type: 'password', inputmode: 'numeric', autocomplete: 'off', maxlength: 8, style: 'text-align:center;font-size:22px;letter-spacing:6px' });
+  function go() {
+    call('adminLogin', [pin.value], function (r) {
+      if (!r.ok) { toast(r.error); pin.value = ''; return; }
+      session = r.session; keep('ll_admin', session); D = r.data; render();
+    });
+  }
+  pin.addEventListener('keydown', function (e) { if (e.key === 'Enter') go(); });
+  if (session) setTimeout(function () { api('adminRefresh', [], function (d) { D = d; render(); }); }, 0);
+  return [h('div', { class: 'stack pad', style: 'padding-top:72px' }, [
+    h('div', { class: 'small muted', text: 'Store admin' }), h('h1', { style: 'font-size:26px;line-height:32px', text: BOOT.store }),
+    field('Enter your PIN', pin), h('button', { type: 'button', class: 'btn', text: 'Open', onclick: go })
+  ])];
+}
+function nav() {
+  var todo = D.orders.filter(function (o) { return o.status === 'payment_check' || o.refundDue || (o.status === 'confirmed' && o.mode === 'ship'); }).length;
+  var waiting = (D.reviews || []).filter(function (r) { return r.status === 'waiting'; }).length;
+  function b(id, label) { return h('button', { type: 'button', class: tab === id ? 'on' : '', 'aria-current': tab === id ? 'page' : null, text: label, onclick: function () { tab = id; render(); window.scrollTo(0, 0); if (id !== 'sales') api('adminRefresh', [], function (d) { D = d; render(); }, true); } }); }
+  return h('nav', { class: 'nav', 'aria-label': 'Admin sections' }, [b('orders', 'Orders' + (todo ? ' · ' + todo : '')), b('products', 'Products'), b('reviews', 'Reviews' + (waiting ? ' · ' + waiting : '')), b('sales', 'Insights')]);
+}
+function header(title, right) {
+  return h('div', { class: 'row between', style: 'padding:20px 20px 8px' }, [
+    h('div', null, [h('div', { class: 'small muted', text: D.store.name + ' admin' }), h('h1', { style: 'font-size:24px;line-height:30px', text: title })]), right
+  ]);
+}
+
+/* ----------------------------------------------------------------- orders */
+function contact(o) {
+  if (!o.phone && !o.email) return null;
+  var digits = o.phone.replace(/\D/g, ''); if (digits.length === 10) digits = '91' + digits;
+  function a(text, href, blank) { return h('a', { class: 'btn sec sm', href: href, target: blank ? '_blank' : null, rel: blank ? 'noopener' : null, text: text }); }
+  return h('div', { class: 'row' }, [o.phone ? a('Call', 'tel:' + o.phone) : null, o.phone ? a('WhatsApp', 'https://wa.me/' + digits, true) : null, o.email ? a('Email', 'mailto:' + o.email) : null]);
+}
+function head(o, tag) {
+  return h('div', { class: 'row between', style: 'align-items:flex-start' }, [
+    h('div', { class: 'grow stack', style: 'gap:3px' }, [
+      h('div', { style: 'font-weight:600', text: o.id + (o.name ? ' · ' + o.name : '') }),
+      h('div', { class: 'small muted', text: o.itemsText }),
+      h('div', { class: 'small muted', text: (o.source === 'inperson' ? 'In-person sale' : o.mode === 'ship' ? 'Deliver' : 'Collect in person') + ' · ' + o.created })
+    ]),
+    h('div', { style: 'text-align:right;flex-shrink:0' }, [h('div', { class: 'price', style: 'font-size:18px', text: rs(o.total) }), tag || null])
+  ]);
+}
+function proofBits(o) {
+  var out = [];
+  if (o.proofRef) out.push(h('div', { class: 'row between', style: 'padding:8px 8px 8px 12px;border-radius:12px;background:#F3F6F4' }, [
+    h('div', null, [h('div', { class: 'tiny muted', text: 'UPI reference number' }), h('div', { class: 'price', style: 'font-size:19px;letter-spacing:1px', text: o.proofRef })]),
+    h('button', { type: 'button', class: 'btn sec sm fit', text: 'Copy', onclick: function () { copy(o.proofRef); } })]));
+  if (o.hasShot) out.push(h('button', { type: 'button', class: 'btn sec sm', text: 'View payment screenshot', onclick: function () {
+    api('adminProof', [o.id], function (src) { var close = sheet([h('h2', { text: 'Payment screenshot · ' + o.id }), h('img', { src: src, alt: 'Payment screenshot', style: 'width:100%;border-radius:12px' }), h('button', { type: 'button', class: 'btn sec', text: 'Close', onclick: function () { close(); } })]); });
+  } }));
+  else if (o.shotDeleted) out.push(h('div', { class: 'tiny muted', text: 'Screenshot removed after the keeping period.' }));
+  if (o.flags) out.push(h('div', { class: 'note', text: o.flags }));
+  return out;
+}
+function copy(text) {
+  try { navigator.clipboard.writeText(text).then(function () { toast('Copied.'); }, function () { toast(text); }); } catch (e) { toast(text); }
+}
+function card(o, hot, kids) { return h('div', { class: 'card stack ocard' + (hot ? ' hot' : ''), id: 'o-' + o.id }, kids); }
+function two(a, b) { return h('div', { class: 'grid2', style: 'gap:10px' }, [a, b]); }
+function button(text, cls, fn) { return h('button', { type: 'button', class: 'btn sm ' + (cls || ''), text: text, onclick: fn }); }
+function cancelButton(o) { return button('Cancel order', 'warn', function () { cancelSheet(o); }); }
+
+function viewOrders() {
+  var by = { check: [], refund: [], pack: [], collect: [], waiting: [], sent: [], done: [] };
+  D.orders.forEach(function (o) {
+    if (o.refundDue) by.refund.push(o);
+    else if (o.status === 'payment_check') by.check.push(o);
+    else if (o.status === 'confirmed' && o.mode === 'ship') by.pack.push(o);
+    else if (o.status === 'cash_pickup' || o.status === 'confirmed') by.collect.push(o);
+    else if (o.status === 'awaiting_payment') by.waiting.push(o);
+    else if (o.status === 'shipped') by.sent.push(o);
+    else by.done.push(o);
+  });
+  var out = [header('Orders', h('button', { type: 'button', class: 'btn sm fit', onclick: saleSheet }, [ic('plus', 18), 'In-person sale']))];
+  if (D.store.missing.length) out.push(h('div', { class: 'note', style: 'margin:4px 20px 0', text: 'Finish setting up: add your ' + D.store.missing.join(', ') + ' in the Sheet\'s Settings tab.' }));
+  function section(title, list, amber, fn) {
+    if (!list.length) return;
+    out.push(h('h2', { class: 'sec-h' + (amber ? ' amber' : ''), text: title + ' · ' + list.length }));
+    list.forEach(function (o) { out.push(fn(o)); });
+  }
+  section('Payment to check', by.check, true, function (o) {
+    return card(o, true, [head(o), h('div', { class: 'small muted', text: 'Says paid ' + o.proofAt + (o.mode === 'ship' ? ' · ' + o.address : '') })].concat(proofBits(o)).concat([
+      two(button('Payment received', '', function () { act('adminPaymentDecision', [o.id, true], function () { toast('Order confirmed. The customer has been emailed.'); }); }),
+        button('Not received', 'sec', function () {
+          var close = sheet([h('h2', { text: 'No payment for ' + o.id + '?' }), h('p', { class: 'small muted', text: 'The order is cancelled, the items go back on sale, and the customer is emailed to reply with proof if they did pay.' }),
+            button('Yes, payment not received', 'warn', function () { close(); act('adminPaymentDecision', [o.id, false]); }), button('Go back', 'sec', function () { close(); })]);
+        })),
+      h('div', { class: 'tiny muted', text: 'Find ' + rs(o.total) + ' in your UPI app first. A screenshot can be faked.' }), contact(o)]));
+  });
+  section('Refunds to make', by.refund, true, function (o) {
+    return card(o, true, [head(o, h('span', { class: 'tag red', text: 'Refund due' })), h('div', { class: 'small muted', text: o.cancelReason || 'Cancelled after payment' })].concat(proofBits(o)).concat([
+      button('I have refunded ' + rs(o.total), '', function () { act('adminRefunded', [o.id]); }), contact(o)]));
+  });
+  section('To pack and send', by.pack, false, function (o) {
+    return card(o, false, [head(o, h('span', { class: 'tag', text: 'Paid' })), h('div', { class: 'small', text: o.address }),
+      two(button('Mark as sent', '', function () { shipSheet(o); }), button('Copy address', 'sec', function () { copy(o.name + ', ' + o.phone + ', ' + o.address); })), contact(o), cancelButton(o)]);
+  });
+  section('Waiting to be collected', by.collect, false, function (o) {
+    var kids = [head(o, o.paid ? h('span', { class: 'tag', text: 'Paid' }) : h('span', { class: 'tag amber', text: 'Cash due' }))];
+    if (!o.paid) kids.push(h('div', { class: 'small muted', text: 'Kept aside until ' + o.hold }));
+    kids.push(o.paid ? button('Collected', '', function () { act('adminCollected', [o.id, '']); })
+      : two(button('Collected · cash', '', function () { act('adminCollected', [o.id, 'cash']); }), button('Collected · UPI', 'sec', function () {
+        var qr = qrCanvas(upiLink(o.total, 'Order ' + o.id), 400);
+        var close = sheet([h('h2', { text: 'Collect ' + rs(o.total) + ' by UPI' }), qr ? h('div', { style: 'display:flex;justify-content:center' }, [qr]) : null, h('div', { class: 'small', style: 'text-align:center', text: 'UPI ID: ' + D.store.upiId }),
+          button('Payment received · mark collected', '', function () { close(); act('adminCollected', [o.id, 'upi']); }), button('Close', 'sec', function () { close(); })]);
+      })));
+    kids.push(contact(o)); kids.push(cancelButton(o));
+    return card(o, false, kids);
+  });
+  section('On the way', by.sent, false, function (o) {
+    var det = [o.shipProvider, o.driverName, o.driverPhone].filter(function (x) { return x; }).join(' · ');
+    return card(o, false, [head(o, h('span', { class: 'tag', text: 'Sent' })), h('div', { class: 'small muted', text: 'Sent ' + o.shippedAt + (det ? ' · ' + det : '') }),
+      o.shipTracking ? h('a', { class: 'small', href: o.shipTracking, target: '_blank', rel: 'noopener', text: 'Open tracking link' }) : null,
+      two(button('Mark delivered', '', function () { act('adminDelivered', [o.id]); }), button('Edit delivery details', 'sec', function () { shipSheet(o); })), contact(o)]);
+  });
+  section('Waiting for the customer to pay', by.waiting, false, function (o) {
+    return card(o, false, [head(o), h('div', { class: 'small muted', text: 'Items held until ' + o.hold + '. Released by itself if not paid.' }), contact(o), cancelButton(o)]);
+  });
+  section('Recent', by.done, false, function (o) {
+    return card(o, false, [head(o, h('span', { class: 'tag' + (o.status === 'cancelled' ? ' red' : ''), text: o.status === 'cancelled' ? 'Cancelled' : 'Done' })),
+      o.status === 'cancelled' && o.cancelReason ? h('div', { class: 'small muted', text: o.cancelReason }) : null]);
+  });
+  if (out.length === 1 + (D.store.missing.length ? 1 : 0)) out.push(h('p', { class: 'pad muted', style: 'padding-top:16px', text: 'No orders yet. Share your shop link to get started.' }));
+  out.push(h('div', { class: 'stack pad', style: 'padding-top:16px;padding-bottom:20px' }, [
+    button('Refresh', 'sec', function () { act('adminRefresh', []); }),
+    D.store.shopUrl ? button('Copy shop link', 'sec', function () { copy(D.store.shopUrl); }) : null,
+    D.store.emailsLeft != null ? h('div', { class: 'tiny muted', style: 'text-align:center', text: 'Emails left today: ' + D.store.emailsLeft }) : null
+  ]));
+  return out;
+}
+function shipSheet(o) {
+  var edit = o.status === 'shipped';
+  function inp(val, attrs) { attrs.value = val; return h('input', attrs); }
+  var provider = inp(o.shipProvider, { type: 'text', maxlength: 60, placeholder: 'Courier or delivery app' });
+  var link = inp(o.shipTracking, { type: 'url', inputmode: 'url', maxlength: 400, placeholder: 'Paste the link from the delivery app' });
+  var dname = inp(o.driverName, { type: 'text', maxlength: 60 });
+  var dphone = inp(o.driverPhone, { type: 'tel', maxlength: 16 });
+  var note = inp(o.shipNote, { type: 'text', maxlength: 200, placeholder: 'e.g. Arriving between 4 and 6 pm' });
+  var tell = h('input', { type: 'checkbox', id: 'tell', style: 'width:24px;height:24px;accent-color:#1E4A40' });
+  var close = sheet([
+    h('h2', { text: (edit ? 'Delivery details · ' : 'Send order ') + o.id }),
+    h('p', { class: 'small muted', text: 'All of these are optional. Whatever you fill in is emailed to the customer.' }),
+    field('Delivery service', provider), field('Tracking link', link), field('Driver name', dname), field('Driver phone', dphone), field('Note for the customer', note),
+    edit ? h('div', { class: 'row' }, [tell, h('label', { for: 'tell', class: 'small', text: 'Email the customer about this change' })]) : null,
+    button(edit ? 'Save details' : 'Mark as sent and email the customer', '', function () {
+      var d = { provider: provider.value, tracking: link.value.trim(), driverName: dname.value, driverPhone: dphone.value.trim(), note: note.value };
+      if (d.tracking && !/^https?:\/\//i.test(d.tracking)) return toast('The tracking link should start with https://');
+      close(); act('adminShip', [o.id, d, edit ? tell.checked : true], function () { toast(edit ? 'Details saved.' : 'Marked as sent.'); });
+    }),
+    button('Go back', 'sec', function () { close(); })
+  ]);
+}
+function cancelSheet(o) {
+  var why = h('select', null, ['Out of stock', 'Customer asked to cancel', 'Could not deliver', 'Not collected', 'Other'].map(function (x) { return h('option', { value: x, text: x }); }));
+  var more = h('input', { type: 'text', maxlength: 120 });
+  var close = sheet([
+    h('h2', { text: 'Cancel order ' + o.id + '?' }),
+    h('p', { class: 'small muted', text: 'The items go back on sale and the customer is emailed.' + (o.paid ? ' This order is paid, so it will move to Refunds to make.' : '') }),
+    field('Reason', why), field('Anything to add (optional)', more),
+    button('Yes, cancel the order', 'warn', function () { close(); act('adminCancel', [o.id, why.value + (more.value.trim() ? ': ' + more.value.trim() : '')]); }),
+    button('Keep the order', 'sec', function () { close(); })
+  ]);
+}
+function saleSheet() {
+  var qty = {}, via = 'cash';
+  var totalEl = h('div', { class: 'price', style: 'font-size:22px' }), qrBox = h('div');
+  var name = h('input', { type: 'text', maxlength: 80 }), phone = h('input', { type: 'tel', maxlength: 16 });
+  var list = D.products.filter(function (p) { return p.stock > 0; });
+  function total() { var t = 0; list.forEach(function (p) { t += (qty[p.id] || 0) * p.price; }); return t; }
+  function draw() {
+    var t = total();
+    totalEl.textContent = 'Total ' + rs(t);
+    qrBox.textContent = '';
+    if (via === 'upi' && t > 0 && D.store.upiId) { var qr = qrCanvas(upiLink(t, D.store.name), 400); if (qr) qrBox.appendChild(h('div', { style: 'display:flex;justify-content:center' }, [qr])); }
+  }
+  var cash = h('button', { type: 'button', class: 'opt on', onclick: function () { via = 'cash'; cash.className = 'opt on'; upi.className = 'opt'; draw(); } }, [h('b', { text: 'Cash' })]);
+  var upi = h('button', { type: 'button', class: 'opt', onclick: function () { via = 'upi'; upi.className = 'opt on'; cash.className = 'opt'; draw(); } }, [h('b', { text: 'UPI' }), h('span', { text: 'Shows a QR code' })]);
+  var close = sheet([
+    h('h2', { text: 'In-person sale' }),
+    list.length ? h('div', { class: 'stack', style: 'gap:8px' }, list.map(function (p) {
+      return h('div', { class: 'card row', style: 'padding:10px' }, [photo(p.photos[0], p.name, 'thumb', 200),
+        h('div', { class: 'grow' }, [h('div', { style: 'font-weight:500;font-size:14px', text: p.name }), h('div', { class: 'small muted', text: rs(p.price) + ' · ' + p.stock + ' in stock' })]),
+        stepper(0, 0, p.stock, function (v) { qty[p.id] = v; draw(); }, 'Quantity of ' + p.name)]);
+    })) : h('p', { class: 'muted', text: 'Nothing is in stock.' }),
+    totalEl, two(cash, upi), qrBox,
+    field('Customer name (optional)', name), field('Customer phone (optional)', phone),
+    button('Record sale', '', function () {
+      var items = list.filter(function (p) { return qty[p.id] > 0; }).map(function (p) { return { id: p.id, qty: qty[p.id] }; });
+      if (!items.length) return toast('Choose at least one item.');
+      close(); act('adminInPersonSale', [{ items: items, via: via, name: name.value, phone: phone.value }], function () { toast('Sale recorded. Stock updated.'); });
+    }),
+    button('Go back', 'sec', function () { close(); })
+  ]);
+  draw();
+}
+
+/* --------------------------------------------------------------- products */
+function viewProducts() {
+  var out = [header('Products', h('button', { type: 'button', class: 'btn sm fit', onclick: function () { productSheet(null); } }, [ic('plus', 18), 'Add product'])),
+    h('p', { class: 'small muted pad', style: 'padding-bottom:12px', text: 'Tap + or − to change how many you have. Stock goes down by itself when someone orders.' })];
+  if (!D.products.length) out.push(h('p', { class: 'pad muted', text: 'No products yet. Tap Add product to add your first one.' }));
+  out.push(h('div', { class: 'stack pad', style: 'gap:10px;padding-bottom:20px' }, D.products.map(function (p) {
+    var tag = h('span');
+    function setTag() {
+      var t = !p.active ? ['Hidden', 'red'] : p.stock < 1 ? ['Sold out', 'amber'] : p.stock <= D.store.lowStockAt ? ['Low stock', 'amber'] : ['On sale', ''];
+      tag.className = 'tag ' + t[1]; tag.textContent = t[0];
+    }
+    setTag();
+    return h('div', { class: 'card row', style: 'padding:12px' }, [
+      photo(p.photos[0], p.name, 'thumb', 200),
+      h('div', { class: 'grow stack', style: 'gap:4px' }, [
+        h('div', { style: 'font-weight:600;font-size:14px;line-height:19px', text: p.name }),
+        h('div', { class: 'row wrap', style: 'gap:4px 8px' }, [h('span', { text: rs(p.price) }), tag]),
+        h('button', { type: 'button', style: 'border:none;background:none;padding:0;color:#1E4A40;font:600 13px Inter,sans-serif;text-align:left;min-height:28px;cursor:pointer', text: 'Edit', onclick: function () { productSheet(p); } })
+      ]),
+      stepper(p.stock, 0, 9999, function (v) {
+        p.stock = v; setTag();
+        clearTimeout(stockTimers[p.id]);
+        stockTimers[p.id] = setTimeout(function () { api('adminSetStock', [p.id, v], function (d) { D = d; }, true); }, 900);
+      }, 'Stock of ' + p.name)
+    ]);
+  })));
+  return out;
+}
+function productSheet(p) {
+  var photos = (p ? p.photos : []).map(function (id) { return { id: id }; });
+  var cat = p ? p.category : (D.store.categories[0] || ''), stock = p ? p.stock : 1;
+  var name = h('input', { type: 'text', maxlength: 80, value: p ? p.name : '' });
+  var price = h('input', { type: 'text', inputmode: 'numeric', maxlength: 7, value: p ? String(p.price) : '' });
+  var desc = h('textarea', { rows: 4, maxlength: 600, placeholder: 'What it is made of, the scent, the size, how long it burns' });
+  desc.value = p ? p.description : '';
+  var live = h('input', { type: 'checkbox', id: 'live', style: 'width:24px;height:24px;accent-color:#1E4A40' });
+  live.checked = p ? p.active : true;
+  var grid = h('div', { class: 'grid3' }), cats = h('div', { class: 'row wrap', style: 'gap:8px' });
+  function picker(label, icon, capture) {
+    var input = h('input', { type: 'file', accept: 'image/*', capture: capture ? 'environment' : null, style: 'position:absolute;opacity:0;width:1px;height:1px', onchange: function (e) {
+      var f = e.target.files && e.target.files[0];
+      if (f) shrink(f, 900, true, 0.8, function (d) { photos.push({ data: d }); drawPhotos(); });
+    } });
+    return h('label', { style: 'position:relative;aspect-ratio:1/1;border-radius:12px;border:2px dashed #B9C6C1;background:#fff;font-size:13px;font-weight:600;cursor:pointer;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;text-align:center' }, [ic(icon, 24), label, input]);
+  }
+  function drawPhotos() {
+    grid.textContent = '';
+    photos.forEach(function (ph, i) {
+      var im = ph.data ? h('img', { class: 'sq', src: ph.data, alt: 'New photo ' + (i + 1) }) : photo(ph.id, 'Photo ' + (i + 1), 'sq', 300);
+      grid.appendChild(h('div', { style: 'position:relative;border-radius:12px;overflow:hidden' }, [im,
+        h('button', { type: 'button', 'aria-label': 'Remove photo ' + (i + 1), style: 'position:absolute;top:0;right:0;width:44px;height:44px;border:none;background:none;cursor:pointer;display:flex;align-items:center;justify-content:center',
+          onclick: function () { photos.splice(i, 1); drawPhotos(); } }, [h('span', { style: 'width:26px;height:26px;border-radius:13px;background:#16211E;color:#fff;display:flex;align-items:center;justify-content:center' }, [ic('x', 14)])])]));
+    });
+    if (photos.length < 4) { grid.appendChild(picker('Take photo', 'cam', true)); grid.appendChild(picker('From gallery', 'pic', false)); }
+  }
+  function drawCats() {
+    cats.textContent = '';
+    D.store.categories.forEach(function (c) { cats.appendChild(h('button', { type: 'button', class: 'chip' + (c === cat ? ' on' : ''), 'aria-pressed': String(c === cat), text: c, onclick: function () { cat = c; drawCats(); } })); });
+  }
+  drawPhotos(); drawCats();
+  var close = sheet([
+    h('h2', { text: p ? 'Edit product' : 'Add a product' }),
+    h('div', { class: 'small', style: 'font-weight:600', text: 'Photos (up to 4, the first is the main photo)' }), grid,
+    h('div', { class: 'tiny muted', text: 'Photos are cropped square and made smaller on your phone, so they upload quickly.' }),
+    field('Name', name),
+    h('div', { class: 'stack', style: 'gap:8px' }, [h('div', { class: 'small', style: 'font-weight:500', text: 'Category' }), cats]),
+    h('div', { class: 'grid2', style: 'align-items:end' }, [field('Price (Rs.)', price),
+      h('div', { class: 'stack', style: 'gap:6px' }, [h('div', { class: 'small', style: 'font-weight:500', text: 'How many do you have?' }), stepper(stock, 0, 9999, function (v) { stock = v; }, 'Stock')])]),
+    field('Description (optional)', desc),
+    h('div', { class: 'card row' }, [live, h('label', { for: 'live', class: 'grow' }, [h('div', { style: 'font-weight:600', text: 'Show in the shop' }), h('div', { class: 'small muted', text: 'Untick to hide it from customers' })])]),
+    button('Save product', '', function () {
+      var d = { id: p ? p.id : '', name: name.value, category: cat, price: Number(String(price.value).replace(/[^\d.]/g, '')), stock: stock, description: desc.value, active: live.checked,
+        keep: photos.filter(function (x) { return x.id; }).map(function (x) { return x.id; }), add: photos.filter(function (x) { return x.data; }).map(function (x) { return x.data; }) };
+      if (String(d.name).trim().length < 2) return toast('Please give the product a name.');
+      if (!(d.price >= 1)) return toast('Please enter a price in rupees.');
+      api('adminSaveProduct', [d], function (x) { close(); D = x; render(); toast('Product saved.'); });
+    }),
+    button('Go back', 'sec', function () { close(); })
+  ]);
+}
+
+/* ---------------------------------------------------------------- reviews */
+function stars(n) { var t = ''; for (var i = 1; i <= 5; i++) t += i <= n ? '★' : '☆'; return h('span', { role: 'img', 'aria-label': n + ' out of 5 stars', style: 'color:#B8730A;font-size:17px;letter-spacing:1px', text: t }); }
+function viewReviews() {
+  var out = [header('Reviews', null)];
+  if (!D.store.reviewsOn) out.push(h('div', { class: 'note', style: 'margin:4px 20px 0', text: 'Reviews are switched off (Settings ▸ reviewsOn). Buyers are not invited and nothing is shown in the shop.' }));
+  out.push(h('div', { class: 'card small', style: 'margin:4px 20px 0' }, [h('div', { style: 'font-weight:600;margin-bottom:4px', text: 'How to check a review' }),
+    h('div', { text: 'Publish honest reviews, good or bad. You cannot change what a buyer wrote; reply instead. Don\'t publish abuse, personal details, spam, or claims that a product treats or cures a health condition.' })]));
+  var waiting = D.reviews.filter(function (r) { return r.status === 'waiting'; }), rest = D.reviews.filter(function (r) { return r.status !== 'waiting'; });
+  function bits(r) {
+    return [
+      h('div', { class: 'row between', style: 'align-items:flex-start' }, [h('div', { class: 'grow' }, [h('div', { style: 'font-weight:600', text: r.productName }), h('div', { class: 'small muted', text: r.customerName + ' · order ' + r.orderId + ' · ' + r.created })]), stars(r.stars)]),
+      r.text ? h('p', { style: 'font-size:15px;line-height:22px', text: r.text }) : h('p', { class: 'small muted', text: 'Stars only, no text.' }),
+      h('div', { class: 'tiny muted', text: 'Shown as: ' + r.showAs }),
+      r.reply ? h('div', { class: 'small', style: 'padding:10px 12px;border-radius:10px;background:#F3F6F4' }, [h('div', { style: 'font-weight:600', text: 'Your reply' }), h('div', { text: r.reply })]) : null
+    ];
+  }
+  out.push(h('h2', { class: 'sec-h amber', text: 'Reviews to check · ' + waiting.length }));
+  if (!waiting.length) out.push(h('p', { class: 'small muted pad', text: 'Nothing to check.' }));
+  waiting.forEach(function (r) {
+    out.push(h('div', { class: 'card stack ocard hot' }, bits(r).concat([
+      two(button('Publish', '', function () { act('adminReviewDecision', [r.id, true, ''], function () { toast('Published.'); }); }), button('Don\'t publish', 'sec', function () { hideSheet(r, false); })),
+      button(r.reply ? 'Edit reply' : 'Reply', 'sec', function () { replySheet(r); })
+    ])));
+  });
+  if (rest.length) out.push(h('h2', { class: 'sec-h', text: 'Checked' }));
+  rest.forEach(function (r) {
+    var pub = r.status === 'published';
+    out.push(h('div', { class: 'card stack ocard' }, [h('span', { class: 'tag' + (pub ? '' : ' red'), style: 'align-self:flex-start', text: pub ? 'In the shop' : 'Not published · ' + r.reason })].concat(bits(r)).concat([
+      pub ? two(button(r.reply ? 'Edit reply' : 'Reply', 'sec', function () { replySheet(r); }), button('Take down', 'warn', function () { hideSheet(r, true); })) : null
+    ])));
+  });
+  out.push(h('div', { style: 'height:20px' }));
+  return out;
+}
+function hideSheet(r, takeDown) {
+  var reasons = takeDown ? ['Buyer asked to remove it', 'Abuse or offensive', 'Personal details', 'Health or cure claim', 'Other']
+    : ['Health or cure claim', 'Abuse or offensive', 'Personal details', 'Not about the product', 'Spam or fake', 'Other'];
+  var why = h('select', null, reasons.map(function (x) { return h('option', { value: x, text: x }); }));
+  var close = sheet([
+    h('h2', { text: takeDown ? 'Take this review down?' : 'Don\'t publish this review?' }),
+    h('p', { class: 'small muted', text: 'It stays in your Sheet with the reason, but customers won\'t see it. Don\'t hide a review only because it is negative.' }),
+    field('Reason', why),
+    button(takeDown ? 'Take down' : 'Don\'t publish', 'warn', function () { close(); act('adminReviewDecision', [r.id, false, why.value]); }),
+    button('Go back', 'sec', function () { close(); })
+  ]);
+}
+function replySheet(r) {
+  var ta = h('textarea', { rows: 4, maxlength: 600, placeholder: 'Thank the buyer, or answer their point' });
+  ta.value = r.reply;
+  var close = sheet([
+    h('h2', { text: 'Reply to ' + r.showAs }),
+    h('p', { class: 'small muted', text: 'Your reply is shown under the review once it is published. Leave it empty to remove your reply.' }),
+    field('Your reply', ta),
+    button('Save reply', '', function () { close(); act('adminReviewReply', [r.id, ta.value], function () { toast('Reply saved.'); }); }),
+    button('Go back', 'sec', function () { close(); })
+  ]);
+}
+
+/* ------------------------------------------------------------------ sales */
+function viewSales() {
+  var now = new Date(), month = (stats && stats.month) || (now.getFullYear() + '-' + ('0' + (now.getMonth() + 1)).slice(-2));
+  var pick = h('input', { type: 'month', value: month, onchange: function (e) { if (e.target.value) load(e.target.value); } });
+  function load(m) { api('adminStats', [m], function (r) { stats = r; render(); }); }
+  if (!stats) setTimeout(function () { load(month); }, 0);
+  var out = [header('Insights', null), h('div', { class: 'pad' }, [field('Month', pick)])];
+  if (stats) {
+    var r = stats;
+    function tile(label, value) { return h('div', { class: 'tile' }, [h('span', { class: 'small muted', text: label }), h('b', { text: String(value) })]); }
+    out.push(h('div', { class: 'grid2 pad', style: 'padding-top:16px;gap:10px' }, [
+      tile('Money received', rs(r.sales)), tile('Orders', r.orders), tile('By UPI', rs(r.upi)), tile('By cash', rs(r.cash)),
+      tile('Customers', r.customers), tile('Items sold', r.items), tile('New customers', r.newCustomers), tile('Returning customers', r.returningCustomers),
+      tile('Delivered orders', r.shipped), tile('Collected orders', r.pickup), tile('In-person sales', r.inPerson), tile('Payments to check', r.toCheck),
+      tile('Delivery fees', rs(r.shippingFees)), tile('Cancelled', r.cancelled), tile('Cash still due', rs(r.cashDue)), tile('Refunds due', rs(r.refundsDue)),
+      tile('Reviews received', r.reviewsIn), tile('Average stars', r.avgStars == null ? '–' : r.avgStars + ' / 5'), tile('Reviews published', r.reviewsPublished), tile('Reviews waiting', r.reviewsWaiting)
+    ]));
+    if (r.top.length) out.push(h('div', { class: 'card stack', style: 'margin:16px 20px 0;gap:8px' }, [h('div', { style: 'font-weight:600', text: 'Best sellers' })].concat(r.top.map(function (t) {
+      return h('div', { class: 'sum small' }, [h('span', { text: t.name }), h('span', { text: String(t.qty) })]);
+    }))));
+  }
+  if (stats && stats.lowStock && stats.lowStock.length) out.push(h('div', { class: 'card stack', style: 'margin:16px 20px 0;gap:8px' }, [h('div', { style: 'font-weight:600', text: 'Running low right now' })].concat(stats.lowStock.map(function (t) {
+    return h('div', { class: 'sum small' }, [h('span', { text: t.name }), h('span', { text: t.stock ? t.stock + ' left' : 'Sold out' })]);
+  }))));
+  out.push(h('p', { class: 'tiny muted pad', style: 'padding-top:16px', text: 'Customers are counted by phone number, from paid orders. The same numbers are on the Dashboard tab of your Google Sheet.' }));
+  out.push(h('div', { class: 'pad', style: 'padding-top:20px;padding-bottom:20px' }, [button('Sign out', 'sec', signOut)]));
+  return out;
+}
+render();
+</script>
+</body>
+</html>

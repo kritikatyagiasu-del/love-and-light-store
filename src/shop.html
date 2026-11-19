@@ -1,0 +1,509 @@
+<!doctype html>
+<html lang="en">
+<head>
+<base target="_top">
+<meta charset="utf-8">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Outfit:wght@500;600&display=swap">
+<style>
+/*__CSS__*/
+</style>
+</head>
+<body>
+<div id="app"></div>
+<div id="toast" role="status"></div>
+<div id="busy"><div></div></div>
+<script>
+/*__QR__*/
+</script>
+<script>
+/*__COMMON__*/
+var BOOT = "__BOOT__";
+var S = BOOT.shop.store, PRODUCTS = BOOT.shop.products;
+var app = document.getElementById('app');
+var st = {
+  view: 'shop', cat: 'All', pid: null, qty: 1, shot: 0, cart: {}, order: BOOT.order, review: BOOT.review, rv: {},
+  form: { mode: S.pickupAddress ? 'pickup' : 'ship', pay: 'upi', name: '', phone: '', email: '', address: '', city: '', pin: '', consent: false },
+  proof: { ref: '', img: null }
+};
+var pollTimer = null;
+try { st.cart = JSON.parse(keep('ll_cart') || '{}') || {}; } catch (e) { st.cart = {}; }
+
+function product(id) { for (var i = 0; i < PRODUCTS.length; i++) if (PRODUCTS[i].id === id) return PRODUCTS[i]; return null; }
+function lines() {
+  var out = [];
+  Object.keys(st.cart).forEach(function (id) {
+    var p = product(id), q = Math.min(st.cart[id], p ? p.stock : 0);
+    if (!p || q < 1) { delete st.cart[id]; return; }
+    st.cart[id] = q;
+    out.push({ p: p, qty: q });
+  });
+  return out;
+}
+function saveCart() { keep('ll_cart', JSON.stringify(st.cart)); }
+function totals() {
+  var sub = 0, n = 0;
+  lines().forEach(function (l) { sub += l.p.price * l.qty; n += l.qty; });
+  var ship = (st.form.mode === 'ship' && sub < S.freeFrom && sub > 0) ? S.shippingFee : 0;
+  return { sub: sub, count: n, ship: ship, total: sub + ship };
+}
+function go(view, more) {
+  st.view = view;
+  if (more) for (var k in more) st[k] = more[k];
+  render();
+  window.scrollTo(0, 0);
+}
+function setOrder(o) {
+  st.order = o;
+  if (o && (o.status === 'awaiting_payment' || o.status === 'payment_check' || o.status === 'cash_pickup' || o.status === 'confirmed' || o.status === 'shipped')) keep('ll_order', o.token);
+  else keep('ll_order', null);
+}
+function openOrder(o) { setOrder(o); go(o.status === 'awaiting_payment' ? 'pay' : 'status'); }
+function render() {
+  clearInterval(pollTimer); pollTimer = null;
+  app.textContent = '';
+  var v = { shop: viewShop, product: viewProduct, cart: viewCart, pay: viewPay, confirm: viewConfirm, status: viewStatus, review: viewReview }[st.view]();
+  v.forEach(function (n) { if (n) app.appendChild(n); });
+}
+function cartButton() {
+  var n = totals().count;
+  return h('button', { type: 'button', class: 'iconbtn ring', 'aria-label': 'Open cart, ' + n + ' items', onclick: function () { go('cart'); } },
+    [ic('bag'), n ? h('span', { class: 'badge', text: String(n) }) : null]);
+}
+function stockTag(p) {
+  if (p.stock < 1) return h('span', { class: 'tag red', text: 'Sold out' });
+  if (p.stock <= S.lowStockAt) return h('span', { class: 'tag amber', text: 'Only ' + p.stock + ' left' });
+  return null;
+}
+function add(p, qty) {
+  var have = st.cart[p.id] || 0;
+  if (have + qty > p.stock) { toast(p.stock ? 'Only ' + p.stock + ' left of ' + p.name + '.' : p.name + ' is sold out.'); return false; }
+  st.cart[p.id] = have + qty; saveCart(); return true;
+}
+
+/* ------------------------------------------------------------------- shop */
+function viewShop() {
+  var cats = ['All'].concat(S.categories.filter(function (c) { return PRODUCTS.some(function (p) { return p.category === c; }); }));
+  var list = PRODUCTS.filter(function (p) { return st.cat === 'All' || p.category === st.cat; });
+  var t = totals(), saved = keep('ll_order');
+  return [
+    h('div', { class: 'row between', style: 'padding:20px 20px 12px' }, [
+      h('div', { class: 'grow' }, [h('div', { style: 'font:600 22px/28px Outfit,sans-serif', text: S.name }), h('div', { class: 'small muted', text: S.tagline })]),
+      cartButton()
+    ]),
+    saved ? h('div', { class: 'pad', style: 'padding-bottom:12px' }, [h('button', { type: 'button', class: 'btn sec sm', text: 'You have an order in progress. View it',
+      onclick: function () { call('apiGetOrder', [saved], openOrder, { fail: function () { keep('ll_order', null); render(); return false; } }); } })]) : null,
+    cats.length > 2 ? h('div', { class: 'row wrap pad', style: 'gap:8px;padding-bottom:16px' }, cats.map(function (c) {
+      return h('button', { type: 'button', class: 'chip' + (c === st.cat ? ' on' : ''), 'aria-pressed': String(c === st.cat), text: c, onclick: function () { go('shop', { cat: c }); } });
+    })) : null,
+    list.length ? h('div', { class: 'grid2 pad' }, list.map(function (p) {
+      return h('div', { class: 'card', style: 'padding:0;overflow:hidden;display:flex;flex-direction:column' }, [
+        h('button', { type: 'button', 'aria-label': 'View ' + p.name, style: 'border:none;padding:0;background:none;cursor:pointer;position:relative;display:block', onclick: function () { go('product', { pid: p.id, qty: 1, shot: 0 }); } }, [
+          photo(p.photos[0], p.name, 'sq', 500),
+          stockTag(p) ? h('span', { style: 'position:absolute;left:8px;top:8px' }, [stockTag(p)]) : null
+        ]),
+        h('div', { style: 'padding:10px 12px 12px;display:flex;flex-direction:column;gap:8px;flex:1' }, [
+          h('div', { style: 'font-size:14px;line-height:19px;font-weight:500;min-height:38px', text: p.name }),
+          p.avgStars != null ? h('div', { class: 'small', style: 'margin-top:-4px' }, [starRow(p.avgStars, 14), h('span', { class: 'muted', text: ' ' + p.avgStars + ' (' + p.reviewCount + ')' })]) : null,
+          h('div', { class: 'row between', style: 'margin-top:auto' }, [
+            h('div', { class: 'price', style: 'font-size:17px', text: rs(p.price) }),
+            h('button', { type: 'button', class: 'iconbtn', style: 'width:44px;height:44px;background:#E3EEE9;color:#1E4A40', disabled: p.stock < 1, 'aria-label': 'Add ' + p.name + ' to cart',
+              onclick: function () { if (add(p, 1)) { toast('Added to your cart.'); render(); } } }, [ic('plus', 20)])
+          ])
+        ])
+      ]);
+    })) : h('p', { class: 'pad muted', text: 'New pieces are on their way. Please check back soon.' }),
+    h('p', { class: 'small muted', style: 'padding:16px 20px 20px', text: shipLine() + ' Pay by UPI; cash is accepted only when you collect in person.' }),
+    t.count ? h('div', { class: 'bar' }, [h('button', { type: 'button', class: 'btn', style: 'justify-content:space-between', onclick: function () { go('cart'); } },
+      [h('span', { text: t.count + (t.count === 1 ? ' item · ' : ' items · ') + rs(t.sub) }), h('span', { text: 'View cart' })])]) : null
+  ];
+}
+function shipLine() {
+  return 'Collect in person or have it delivered within ' + S.shipArea + '. Delivery is ' + rs(S.shippingFee) + ' on orders under ' + rs(S.freeFrom) + ' and free above that.';
+}
+
+/* ---------------------------------------------------------------- product */
+function viewProduct() {
+  var p = product(st.pid);
+  if (!p) { st.view = 'shop'; return viewShop(); }
+  var inCart = st.cart[p.id] || 0, max = Math.max(0, p.stock - inCart);
+  if (st.qty > max) st.qty = Math.max(1, max);
+  var addBtn = h('button', { type: 'button', class: 'btn', disabled: max < 1, text: max < 1 ? (p.stock < 1 ? 'Sold out' : 'All of these are in your cart') : 'Add to cart · ' + rs(p.price * st.qty),
+    onclick: function () { if (add(p, st.qty)) go('cart'); } });
+  return [
+    topbar('', function () { go('shop'); }, cartButton()),
+    h('div', { class: 'pad' }, [h('div', { style: 'border-radius:18px;overflow:hidden' }, [photo(p.photos[st.shot] || p.photos[0], p.name, 'sq', 900)])]),
+    p.photos.length > 1 ? h('div', { class: 'row pad', style: 'gap:8px;padding-top:12px' }, p.photos.map(function (id, i) {
+      var b = h('button', { type: 'button', 'aria-label': 'Photo ' + (i + 1), 'aria-pressed': String(i === st.shot), style: 'padding:0;background:none;border-radius:10px;overflow:hidden;width:60px;height:60px;cursor:pointer;border:2px solid ' + (i === st.shot ? '#1E4A40' : '#D5DEDA'),
+        onclick: function () { go('product', { shot: i }); } }, [photo(id, '', 'sq', 200)]);
+      return b;
+    })) : null,
+    h('div', { class: 'stack pad', style: 'padding-top:20px;gap:8px' }, [
+      p.category ? h('div', { class: 'small muted', text: p.category }) : null,
+      h('h1', { style: 'font-size:26px;line-height:32px', text: p.name }),
+      h('div', { class: 'row' }, [h('div', { class: 'price', style: 'font-size:24px', text: rs(p.price) }), stockTag(p) || h('span', { class: 'tag', text: 'In stock' })]),
+      p.avgStars != null ? h('a', { href: '#reviews', class: 'small row', style: 'gap:6px;text-decoration:none;color:#16211E;min-height:24px' }, [starRow(p.avgStars, 16), h('span', { text: p.avgStars + ' · ' + p.reviewCount + ' reviews' })]) : null,
+      p.description ? h('p', { style: 'font-size:15px;line-height:23px;color:#2D3A36;margin-top:8px', text: p.description }) : null,
+      h('p', { class: 'small muted', text: 'Each piece is made by hand, so colours and details differ a little from the photo.' })
+    ]),
+    h('div', { class: 'card small', style: 'margin:20px 20px 0' }, [h('div', { text: shipLine() })]),
+    reviewsBlock(p),
+    h('div', { style: 'height:20px' }),
+    h('div', { class: 'bar', style: 'flex-direction:row;align-items:center;gap:12px' }, [
+      max > 0 ? stepper(st.qty, 1, max, function (v) { st.qty = v; addBtn.textContent = 'Add to cart · ' + rs(p.price * v); }, 'Quantity') : null,
+      addBtn
+    ])
+  ];
+}
+
+function starRow(n, size) {
+  var full = Math.round(n), wrap = h('span', { role: 'img', 'aria-label': n + ' out of 5 stars', style: 'display:inline-flex;gap:1px;vertical-align:-2px' });
+  for (var i = 1; i <= 5; i++) wrap.appendChild(starIcon(i <= full, size || 16));
+  return wrap;
+}
+function starIcon(on, size) {
+  var ns = 'http://www.w3.org/2000/svg', s = document.createElementNS(ns, 'svg'), p = document.createElementNS(ns, 'path');
+  s.setAttribute('width', size); s.setAttribute('height', size); s.setAttribute('viewBox', '0 0 24 24'); s.setAttribute('aria-hidden', 'true');
+  p.setAttribute('d', 'M12 3l2.7 5.6 6.1.9-4.4 4.3 1 6.1L12 17l-5.4 2.9 1-6.1-4.4-4.3 6.1-.9z');
+  p.setAttribute('fill', on ? '#B8730A' : 'none'); p.setAttribute('stroke', on ? '#B8730A' : '#8A9692'); p.setAttribute('stroke-width', '1.6'); p.setAttribute('stroke-linejoin', 'round');
+  s.appendChild(p); return s;
+}
+function reviewsBlock(p) {
+  if (!S.reviewsOn) return null;
+  var head = p.reviewCount ? (p.reviewCount === 1 ? '1 review' : p.reviewCount + ' reviews') : 'Reviews';
+  return h('div', { id: 'reviews', class: 'stack pad', style: 'padding-top:24px;gap:10px' }, [
+    h('h2', { text: head }),
+    p.reviewCount ? null : h('p', { class: 'small muted', text: 'No reviews yet. Buyers are invited to review after their order is complete.' })
+  ].concat(p.reviews.map(function (r) {
+    return h('div', { class: 'card stack', style: 'gap:6px' }, [
+      h('div', { class: 'row between' }, [starRow(r.stars, 16), h('span', { class: 'tiny muted', text: r.date })]),
+      r.text ? h('p', { style: 'font-size:15px;line-height:22px', text: r.text }) : null,
+      h('div', { class: 'tiny muted', text: r.by + ' · Verified purchase' }),
+      r.reply ? h('div', { class: 'small', style: 'margin-top:4px;padding:10px 12px;border-radius:10px;background:#F3F6F4' }, [h('div', { style: 'font-weight:600', text: 'Reply from ' + S.name }), h('div', { text: r.reply })]) : null
+    ]);
+  })));
+}
+
+/* ----------------------------------------------------------------- review */
+function viewReview() {
+  var R = st.review;
+  if (!R) return [topbar('Write a review', function () { go('shop'); }), h('p', { class: 'pad muted', text: 'We could not find that order. Please use the link in your email.' })];
+  var out = [topbar('Write a review', function () { go('shop'); }),
+    h('p', { class: 'small muted pad', text: 'Order ' + R.id + '. Review each item you bought. It is optional, and you can review one item and skip the others.' })];
+  if (!R.open) {
+    out.push(h('p', { class: 'pad', style: 'padding-top:12px', text: R.status === 'completed' ? 'Reviews are not open for this order.' : 'You can review this order once it has been delivered or collected.' }));
+    return out;
+  }
+  R.items.forEach(function (it) {
+    var f = st.rv[it.id] = st.rv[it.id] || { stars: 0, text: '', consent: false, anon: false };
+    if (it.done) {
+      out.push(h('div', { class: 'card row', style: 'margin:12px 20px 0' }, [photo(it.photo, it.name, 'thumb', 200),
+        h('div', { class: 'grow' }, [h('div', { style: 'font-weight:600', text: it.name }), h('div', { class: 'small muted', text: it.done === 'published' ? 'Thank you. Your review is in the shop.' : 'Thank you. Your review will appear once it has been checked.' })])]));
+      return;
+    }
+    var starsBox = h('div', { role: 'radiogroup', 'aria-label': 'Stars for ' + it.name, class: 'row', style: 'gap:2px' });
+    function drawStars() {
+      starsBox.textContent = '';
+      for (var i = 1; i <= 5; i++) (function (n) {
+        starsBox.appendChild(h('button', { type: 'button', role: 'radio', 'aria-checked': String(f.stars === n), 'aria-label': n + (n === 1 ? ' star' : ' stars'),
+          style: 'width:44px;height:44px;border:none;background:none;padding:0;cursor:pointer;display:flex;align-items:center;justify-content:center',
+          onclick: function () { f.stars = n; drawStars(); } }, [starIcon(n <= f.stars, 30)]));
+      })(i);
+    }
+    drawStars();
+    var ta = h('textarea', { rows: 4, maxlength: 1000, placeholder: 'What did you like? How did it look, smell, burn?', oninput: function (e) { f.text = e.target.value; } });
+    ta.value = f.text;
+    var cid = 'c-' + it.id, aid = 'a-' + it.id;
+    var consent = h('input', { type: 'checkbox', id: cid, style: 'width:24px;height:24px;flex-shrink:0;accent-color:#1E4A40', onchange: function (e) { f.consent = e.target.checked; } });
+    consent.checked = f.consent;
+    var anon = h('input', { type: 'checkbox', id: aid, style: 'width:24px;height:24px;flex-shrink:0;accent-color:#1E4A40', onchange: function (e) { f.anon = e.target.checked; } });
+    anon.checked = f.anon;
+    out.push(h('div', { class: 'card stack', style: 'margin:12px 20px 0' }, [
+      h('div', { class: 'row' }, [photo(it.photo, it.name, 'thumb', 200), h('div', { class: 'grow', style: 'font-weight:600', text: it.name })]),
+      h('div', { class: 'small', style: 'font-weight:500', text: 'Your rating' }), starsBox,
+      field('Your review (optional)', ta),
+      h('div', { class: 'row', style: 'align-items:flex-start;gap:12px' }, [anon, h('label', { for: aid, class: 'small', text: 'Show my review as "A verified buyer" instead of "' + R.shortName + '"' })]),
+      h('div', { class: 'row', style: 'align-items:flex-start;gap:12px' }, [consent, h('label', { for: cid, class: 'small', text: R.consentText })]),
+      h('button', { type: 'button', class: 'btn', text: 'Send review', onclick: function () {
+        if (!f.stars) return toast('Please choose from 1 to 5 stars.');
+        if (!f.consent) return toast('Please tick the box to agree before sending your review.');
+        call('apiSubmitReview', [R.token, { productId: it.id, stars: f.stars, text: f.text, consent: true, anonymous: f.anon }], function (x) {
+          st.review = x; delete st.rv[it.id]; render(); toast('Thank you for your review.');
+        });
+      } })
+    ]));
+  });
+  out.push(h('p', { class: 'tiny muted', style: 'padding:16px 20px 24px', text: R.rules }));
+  out.push(h('div', { class: 'pad', style: 'padding-bottom:24px' }, [h('button', { type: 'button', class: 'btn sec', text: 'Back to the shop', onclick: function () { go('shop'); } })]));
+  return out;
+}
+
+/* ------------------------------------------------------------------- cart */
+function viewCart() {
+  var ls = lines(), f = st.form;
+  saveCart();
+  if (!ls.length) {
+    return [topbar('Your cart', function () { go('shop'); }), h('div', { class: 'stack pad', style: 'padding-top:24px' }, [
+      h('p', { class: 'muted', text: 'Your cart is empty.' }), h('button', { type: 'button', class: 'btn sec', text: 'Back to the shop', onclick: function () { go('shop'); } })])];
+  }
+  if (f.mode === 'ship') f.pay = 'upi';
+  if (f.mode === 'pickup' && !S.pickupAddress) f.mode = 'ship';
+  var t = totals();
+  function input(key, attrs) {
+    attrs.value = f[key];
+    attrs.oninput = function (e) { f[key] = e.target.value; };
+    return h('input', attrs);
+  }
+  var city = h('select', { onchange: function (e) { f.city = e.target.value; } },
+    [h('option', { value: '', text: 'Choose your city' })].concat(S.cities.map(function (c) { return h('option', { value: c, text: c, selected: c === f.city }); })));
+  var consent = h('input', { type: 'checkbox', id: 'consent', style: 'width:24px;height:24px;flex-shrink:0;accent-color:#1E4A40', onchange: function (e) { f.consent = e.target.checked; } });
+  consent.checked = f.consent;
+  var cta = f.pay === 'upi' ? 'Continue to pay ' + rs(t.total) : 'Place order · ' + rs(t.total) + ' cash at pickup';
+  return [
+    topbar('Your cart', function () { go('shop'); }),
+    h('div', { class: 'stack pad', style: 'padding-top:8px;gap:10px' }, ls.map(function (l) {
+      return h('div', { class: 'card row', style: 'padding:12px;align-items:flex-start' }, [
+        photo(l.p.photos[0], l.p.name, 'thumb', 200),
+        h('div', { class: 'grow stack', style: 'gap:6px' }, [
+          h('div', { class: 'row between', style: 'align-items:flex-start' }, [
+            h('div', { style: 'font-weight:500;line-height:20px', text: l.p.name }),
+            h('button', { type: 'button', class: 'iconbtn', style: 'width:44px;height:44px;margin:-10px -10px 0 0', 'aria-label': 'Remove ' + l.p.name, onclick: function () { delete st.cart[l.p.id]; render(); } }, [ic('x', 18)])
+          ]),
+          h('div', { class: 'row between' }, [
+            stepper(l.qty, 1, l.p.stock, function (v) { st.cart[l.p.id] = v; render(); }, 'Quantity of ' + l.p.name),
+            h('div', { class: 'price', style: 'font-size:17px', text: rs(l.p.price * l.qty) })
+          ])
+        ])
+      ]);
+    })),
+
+    h('h2', { style: 'margin:24px 20px 10px', text: 'How would you like to get it?' }),
+    h('div', { class: 'grid2 pad', style: 'gap:10px' }, [
+      S.pickupAddress ? h('button', { type: 'button', class: 'opt' + (f.mode === 'pickup' ? ' on' : ''), 'aria-pressed': String(f.mode === 'pickup'), onclick: function () { f.mode = 'pickup'; render(); } },
+        [h('b', { text: 'Collect in person' }), h('span', { text: 'Free. UPI or cash.' })]) : null,
+      h('button', { type: 'button', class: 'opt' + (f.mode === 'ship' ? ' on' : ''), 'aria-pressed': String(f.mode === 'ship'), onclick: function () { f.mode = 'ship'; f.pay = 'upi'; render(); } },
+        [h('b', { text: 'Deliver to me' }), h('span', { text: S.shipArea + ' only. ' + (t.sub < S.freeFrom ? rs(S.shippingFee) + ' delivery.' : 'Free delivery.') + ' UPI only.' })])
+    ]),
+    f.mode === 'pickup' ? h('div', { class: 'card small', style: 'margin:12px 20px 0' }, [
+      h('div', { style: 'font-weight:600', text: 'Collect from' }), h('div', { text: S.pickupAddress }),
+      h('div', { class: 'muted', style: 'margin-top:6px', text: 'We will email you when it is confirmed. Cash orders are kept aside for ' + S.pickupHoldHours + ' hours.' })
+    ]) : h('div', { class: 'stack pad', style: 'padding-top:12px' }, [
+      field('House / flat, street, area', input('address', { type: 'text', autocomplete: 'street-address', maxlength: 240 })),
+      h('div', { class: 'grid2', style: 'gap:10px' }, [
+        field('City', city),
+        field('PIN code', input('pin', { type: 'text', inputmode: 'numeric', autocomplete: 'postal-code', maxlength: 6 }))
+      ]),
+      h('div', { class: 'small muted', text: 'We deliver only within ' + S.shipArea + ' for now.' })
+    ]),
+
+    h('h2', { style: 'margin:24px 20px 10px', text: 'Your details' }),
+    h('div', { class: 'stack pad' }, [
+      field('Full name', input('name', { type: 'text', autocomplete: 'name', maxlength: 80 })),
+      field('Mobile number', input('phone', { type: 'tel', autocomplete: 'tel', maxlength: 16 })),
+      field('Email, for your order updates', input('email', { type: 'email', autocomplete: 'email', maxlength: 120 }))
+    ]),
+
+    h('h2', { style: 'margin:24px 20px 10px', text: 'How will you pay?' }),
+    h('div', { class: 'stack pad', style: 'gap:10px' }, [
+      h('button', { type: 'button', class: 'opt' + (f.pay === 'upi' ? ' on' : ''), 'aria-pressed': String(f.pay === 'upi'), onclick: function () { f.pay = 'upi'; render(); } },
+        [h('b', { text: 'UPI, pay now' }), h('span', { text: 'GPay, PhonePe, Paytm or any UPI app' })]),
+      f.mode === 'pickup' ? h('button', { type: 'button', class: 'opt' + (f.pay === 'cash' ? ' on' : ''), 'aria-pressed': String(f.pay === 'cash'), onclick: function () { f.pay = 'cash'; render(); } },
+        [h('b', { text: 'Cash, when I collect' }), h('span', { text: 'Pay at pickup' })])
+        : h('div', { class: 'small muted', style: 'padding:12px 14px;border:1px dashed #B9C6C1;border-radius:14px', text: 'Cash is available only when you collect in person. Delivered orders are paid by UPI first; there is no cash on delivery.' })
+    ]),
+
+    h('div', { class: 'card stack', style: 'margin:24px 20px 0;gap:10px' }, [
+      h('div', { class: 'sum' }, [h('span', { text: 'Items' }), h('span', { text: rs(t.sub) })]),
+      h('div', { class: 'sum' }, [h('span', { text: f.mode === 'ship' ? 'Delivery' : 'Collect in person' }), h('span', { text: t.ship ? rs(t.ship) : 'Free' })]),
+      t.ship ? h('div', { class: 'note', text: 'Add ' + rs(S.freeFrom - t.sub) + ' more for free delivery.' }) : null,
+      h('div', { style: 'height:1px;background:#E3E9E6' }),
+      h('div', { class: 'sum price', style: 'font-size:19px' }, [h('span', { text: 'Total' }), h('span', { text: rs(t.total) })])
+    ]),
+
+    h('div', { class: 'row pad', style: 'margin:16px 0 20px;align-items:flex-start;gap:12px' }, [
+      consent,
+      h('div', { class: 'small' }, [
+        h('label', { for: 'consent', text: S.consentText + ' ' }),
+        h('button', { type: 'button', style: 'border:none;background:none;padding:0;color:#1E4A40;text-decoration:underline;font:inherit;cursor:pointer;min-height:24px', text: 'Privacy notice',
+          onclick: function () { var close = sheet([h('h2', { text: 'Privacy notice' }), h('p', { class: 'small pre', text: S.privacyText }), h('button', { type: 'button', class: 'btn sec', text: 'Close', onclick: function () { close(); } })]); } })
+      ])
+    ]),
+
+    h('div', { class: 'bar' }, [
+      h('button', { type: 'button', class: 'btn', text: cta, onclick: placeOrder }),
+      h('div', { class: 'tiny muted', style: 'text-align:center', text: f.pay === 'upi' ? 'Your items are held for ' + S.holdMinutes + ' minutes while you pay.' : 'Your items are kept aside for ' + S.pickupHoldHours + ' hours.' })
+    ])
+  ];
+}
+function placeOrder() {
+  var f = st.form;
+  var pin = String(f.pin).replace(/\D/g, '');
+  if (f.mode === 'ship') {
+    if (String(f.address).trim().length < 8) return toast('Please enter your full delivery address.');
+    if (!f.city) return toast('Please choose your city.');
+    if (pin.length !== 6 || (S.pinPrefixes.length && !S.pinPrefixes.some(function (p) { return pin.indexOf(p) === 0; }))) return toast('That PIN code is outside ' + S.shipArea + '. We deliver only within ' + S.shipArea + ' for now.');
+  }
+  if (String(f.name).trim().length < 2) return toast('Please enter your full name.');
+  if (!/^\+?\d{8,15}$/.test(String(f.phone).replace(/[\s\-().]/g, ''))) return toast('Please enter a valid mobile number.');
+  if (!/^[^\s@]+@[^\s@]+\.[A-Za-z]{2,}$/.test(String(f.email).trim())) return toast('Please enter a valid email address.');
+  if (!f.consent) return toast('Please tick the box to agree before placing your order.');
+  var payload = { items: lines().map(function (l) { return { id: l.p.id, qty: l.qty }; }), mode: f.mode, pay: f.pay, name: f.name, phone: f.phone, email: f.email, address: f.address, city: f.city, pin: pin, consent: true };
+  call('apiPlaceOrder', [payload], function (r) {
+    if (!r.ok) { if (r.products) { PRODUCTS = r.products; render(); } toast(r.error); return; }
+    r.order.items.forEach(function (l) { var p = product(l.id); if (p) p.stock = Math.max(0, p.stock - l.qty); });
+    st.cart = {}; saveCart(); st.proof = { ref: '', img: null };
+    openOrder(r.order);
+  });
+}
+
+/* -------------------------------------------------------------------- pay */
+function amountCard(o, sub) {
+  return h('div', { style: 'margin:8px 20px 0;padding:18px;border-radius:14px;background:#1E4A40;color:#fff' }, [
+    h('div', { class: 'small', style: 'color:#D6E6DF', text: 'Order ' + o.id + ' · ' + (o.mode === 'ship' ? 'Deliver to me' : 'Collect in person') }),
+    h('div', { class: 'price', style: 'font-size:34px;line-height:40px', text: rs(o.total) }),
+    h('div', { class: 'small', style: 'color:#D6E6DF', text: sub })
+  ]);
+}
+function viewPay() {
+  var o = st.order;
+  var qr = qrCanvas(o.upiLink, 400);
+  pollTimer = setInterval(function () { call('apiGetOrder', [o.token], function (x) { if (x.status !== 'awaiting_payment') openOrder(x); }, { quiet: true }); }, 60000);
+  return [
+    topbar('Pay for your order', null),
+    amountCard(o, rs(o.subtotal) + ' items' + (o.shipping ? ' + ' + rs(o.shipping) + ' delivery' : '') + '. Held for you until ' + o.holdText + '.'),
+    h('h2', { style: 'margin:20px 20px 12px', text: 'Step 1 of 2: pay ' + rs(o.total) + ' by UPI' }),
+    h('div', { class: 'card stack', style: 'margin:0 20px;gap:14px' }, [
+      h('a', { class: 'btn', href: o.upiLink, text: 'Open my UPI app' }),
+      qr ? h('div', { class: 'small muted', style: 'text-align:center', text: 'or scan this code from another phone' }) : null,
+      qr ? h('div', { style: 'display:flex;justify-content:center' }, [qr]) : null,
+      h('div', { class: 'row between', style: 'padding:4px 4px 4px 14px;border-radius:12px;background:#F3F6F4' }, [
+        h('div', { class: 'grow' }, [h('div', { class: 'tiny muted', text: 'UPI ID' }), h('div', { style: 'font-weight:600;word-break:break-all', text: o.upiId })]),
+        h('button', { type: 'button', class: 'btn sec sm fit', text: 'Copy', onclick: function () {
+          try { navigator.clipboard.writeText(o.upiId).then(function () { toast('UPI ID copied.'); }, function () { toast('Press and hold the UPI ID to copy it.'); }); } catch (e) { toast('Press and hold the UPI ID to copy it.'); }
+        } })
+      ])
+    ]),
+    h('div', { class: 'note', style: 'margin:16px 20px 0', text: 'Pay in your UPI app first, then come back here and tap Next. On the next screen you will confirm the payment with its reference number or a screenshot.' }),
+    h('div', { style: 'padding:16px 20px 20px' }, [h('button', { type: 'button', class: 'btn warn sm', text: 'Cancel this order', onclick: function () {
+      var close = sheet([h('h2', { text: 'Cancel order ' + o.id + '?' }), h('p', { class: 'small muted', text: 'Only cancel if you have not paid. The items go back on sale.' }),
+        h('button', { type: 'button', class: 'btn warn', text: 'Yes, cancel the order', onclick: function () { close(); call('apiCancelOrder', [o.token], function (x) { setOrder(x); go('status'); }); } }),
+        h('button', { type: 'button', class: 'btn sec', text: 'Keep my order', onclick: function () { close(); } })]);
+    } })]),
+    h('div', { class: 'bar' }, [
+      h('button', { type: 'button', class: 'btn', text: 'Next: confirm my payment', onclick: function () { go('confirm'); } }),
+      o.storePhone ? h('div', { class: 'tiny muted', style: 'text-align:center', text: 'Trouble paying? Call or WhatsApp ' + o.storePhone }) : null
+    ])
+  ];
+}
+
+/* ---------------------------------------------------------------- confirm */
+function viewConfirm() {
+  var o = st.order, pr = st.proof;
+  var btn = h('button', { type: 'button', class: 'btn', text: 'I have paid ' + rs(o.total), onclick: function () {
+    if (btn.disabled) return;
+    call('apiSubmitProof', [o.token, pr.ref, pr.img], function (x) { st.proof = { ref: '', img: null }; setOrder(x); go('status'); });
+  } });
+  var hint = h('div', { class: 'tiny muted', style: 'text-align:center' });
+  function check() {
+    var n = pr.ref.length, ok = (n === 12) || (n === 0 && !!pr.img);
+    btn.disabled = !ok;
+    hint.textContent = ok ? 'Tap only after the money has left your account.' : (n > 0 && n !== 12 ? 'The reference number has 12 digits (' + n + ' so far).' : 'Enter the reference number or add a screenshot to continue.');
+  }
+  var shotBox = h('div');
+  function drawShot() {
+    shotBox.textContent = '';
+    var pick = h('input', { type: 'file', accept: 'image/*', style: 'position:absolute;opacity:0;width:1px;height:1px', onchange: function (e) {
+      var file = e.target.files && e.target.files[0];
+      if (file) shrink(file, 1400, false, 0.72, function (d) { pr.img = d; drawShot(); check(); });
+    } });
+    if (pr.img) {
+      shotBox.appendChild(h('div', { class: 'row between', style: 'padding:10px 12px;border-radius:12px;background:#E3EEE9' }, [
+        h('img', { src: pr.img, alt: 'Your payment screenshot', style: 'width:52px;height:52px;object-fit:cover;border-radius:8px' }),
+        h('div', { class: 'grow', style: 'font-weight:600;color:#1E4A40;font-size:14px', text: 'Screenshot added' }),
+        h('label', { class: 'btn sec sm fit', style: 'position:relative' }, ['Change', pick])
+      ]));
+    } else {
+      shotBox.appendChild(h('label', { class: 'btn sec', style: 'position:relative;min-height:84px;border:2px dashed #B9C6C1;background:#F3F6F4' }, [ic('up'), 'Choose screenshot', pick]));
+    }
+  }
+  drawShot(); check();
+  return [
+    topbar('Confirm your payment', o.status === 'awaiting_payment' ? function () { go('pay'); } : function () { go('status'); }),
+    h('div', { class: 'card row between', style: 'margin:8px 20px 0' }, [
+      h('div', null, [h('div', { class: 'small muted', text: 'Order ' + o.id + ' · to ' + o.upiId }), h('div', { class: 'price', style: 'font-size:22px', text: rs(o.total) })])
+    ]),
+    h('h2', { style: 'margin:20px 20px 4px', text: 'Step 2 of 2: show us your payment' }),
+    h('p', { class: 'small muted pad', text: 'Give either one. The reference number is easiest if you paid from another phone.' }),
+    h('div', { class: 'card stack', style: 'margin:12px 20px 0' }, [
+      field('12-digit UPI reference number (UTR / UPI transaction ID)', h('input', { type: 'text', inputmode: 'numeric', maxlength: 14, value: pr.ref, placeholder: 'e.g. 412345678901',
+        oninput: function (e) { pr.ref = e.target.value.replace(/\D/g, '').slice(0, 12); if (e.target.value !== pr.ref) e.target.value = pr.ref; check(); } })),
+      h('div', { class: 'small muted', style: 'text-align:center', text: 'or' }),
+      shotBox
+    ]),
+    h('p', { class: 'small muted', style: 'padding:16px 20px 20px', text: 'We check each payment by hand before confirming. If no payment is found, the order is cancelled and the items go back on sale.' }),
+    h('div', { class: 'bar' }, [btn, hint])
+  ];
+}
+
+/* ----------------------------------------------------------------- status */
+function viewStatus() {
+  var o = st.order, s = o.status, title, body = [], extra = [];
+  function p(text, cls) { return h('p', { class: cls || '', text: text }); }
+  var pickup = h('div', { class: 'card small' }, [h('div', { style: 'font-weight:600', text: 'Collect from' }), h('div', { text: o.pickupAddress })]);
+  if (s === 'awaiting_payment') { st.view = 'pay'; return viewPay(); }
+  if (s === 'payment_check') {
+    title = 'Order reserved';
+    body = [p(o.message || 'Your order is reserved, you\'ll receive an email when the order is confirmed.'), p('We are checking your payment of ' + rs(o.total) + '. This page updates by itself.', 'small muted'),
+      h('button', { type: 'button', class: 'btn sec sm', text: 'Change my payment proof', onclick: function () { go('confirm'); } })];
+  } else if (s === 'confirmed') {
+    title = 'Order confirmed';
+    body = [p('Payment received. Thank you, ' + o.name + '.'), o.mode === 'ship' ? p('We are getting your order ready. We will email you when it is on its way.', 'small muted') : pickup];
+  } else if (s === 'cash_pickup') {
+    title = 'Order reserved';
+    body = [p('Your order is reserved. Please collect it and pay ' + rs(o.total) + ' in cash by ' + o.holdText + '.'), pickup, p('After that the items go back on sale.', 'small muted')];
+    extra = [h('button', { type: 'button', class: 'btn warn sm', text: 'Cancel this order', onclick: function () { call('apiCancelOrder', [o.token], function (x) { setOrder(x); render(); }); } })];
+  } else if (s === 'shipped') {
+    title = 'On its way';
+    var d = o.ship || {}, rows = [];
+    if (d.provider) rows.push(h('div', { text: 'Delivery by: ' + d.provider }));
+    if (d.driverName) rows.push(h('div', { text: 'Driver: ' + d.driverName }));
+    if (d.driverPhone) rows.push(h('div', null, ['Driver phone: ', h('a', { href: 'tel:' + d.driverPhone, text: d.driverPhone })]));
+    if (d.note) rows.push(h('div', { text: d.note }));
+    body = [p('Your order was sent out on ' + d.at + '.'), rows.length ? h('div', { class: 'card small stack', style: 'gap:6px' }, rows) : null,
+      d.tracking ? h('a', { class: 'btn', href: d.tracking, target: '_blank', rel: 'noopener', text: 'Track my delivery' }) : null];
+  } else if (s === 'completed') {
+    title = 'Thank you';
+    body = [p('This order is complete. We hope you love it.'),
+      o.canReview ? h('button', { type: 'button', class: 'btn', text: 'Review what you bought', onclick: function () { call('apiReviewInfo', [o.token], function (x) { st.review = x; go('review'); }); } }) : null];
+  } else {
+    title = 'Order cancelled';
+    body = [p(o.message || ('This order was cancelled.' + (o.cancelReason ? ' Reason: ' + o.cancelReason + '.' : ''))),
+      o.refundDue ? p('Your payment will be refunded to you by UPI.', 'small muted') : null,
+      o.canAddProof ? p('If you have already paid, add your payment proof and we will check it.', 'small muted') : null,
+      o.canAddProof ? h('button', { type: 'button', class: 'btn sec sm', text: 'I have already paid', onclick: function () { go('confirm'); } }) : null];
+  }
+  if (s === 'payment_check' || s === 'confirmed' || s === 'cash_pickup' || s === 'shipped') {
+    pollTimer = setInterval(function () { call('apiGetOrder', [o.token], function (x) { if (x.status !== o.status || JSON.stringify(x.ship) !== JSON.stringify(o.ship)) { setOrder(x); render(); } }, { quiet: true }); }, 60000);
+  }
+  return [
+    topbar(title, null),
+    h('div', { class: 'stack pad', style: 'padding-top:8px' }, body),
+    h('div', { class: 'card stack', style: 'margin:16px 20px 0;gap:8px' }, [h('div', { class: 'small muted', text: 'Order ' + o.id })].concat(o.items.map(function (l) {
+      return h('div', { class: 'sum' }, [h('span', { text: l.qty + ' × ' + l.name }), h('span', { text: rs(l.price * l.qty) })]);
+    })).concat([
+      o.shipping ? h('div', { class: 'sum' }, [h('span', { text: 'Delivery' }), h('span', { text: rs(o.shipping) })]) : null,
+      h('div', { style: 'height:1px;background:#E3E9E6' }),
+      h('div', { class: 'sum price', style: 'font-size:17px' }, [h('span', { text: 'Total' }), h('span', { text: rs(o.total) })])
+    ])),
+    h('div', { class: 'stack pad', style: 'padding-top:16px;padding-bottom:24px' }, extra.concat([
+      h('button', { type: 'button', class: 'btn sec', text: 'Back to the shop', onclick: function () { call('apiBoot', [], function (b) { PRODUCTS = b.products; S = b.store; go('shop'); }, { fail: function () { go('shop'); return true; } }); } }),
+      o.storePhone ? h('div', { class: 'tiny muted', style: 'text-align:center', text: 'Questions? Call or WhatsApp ' + o.storePhone }) : null
+    ]))
+  ];
+}
+
+if (BOOT.reviewAsked) st.view = 'review';
+else if (st.order) { setOrder(st.order); st.view = st.order.status === 'awaiting_payment' ? 'pay' : 'status'; }
+render();
+</script>
+</body>
+</html>
