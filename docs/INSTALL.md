@@ -36,9 +36,9 @@ Files: `dist/Code.gs` and `dist/appsscript.json`.
 | pickupAddress | — | "Collect in person" is hidden until this is filled |
 | upiId / upiName | — | UPI orders are refused until upiId is filled |
 | shippingFee / freeShippingFrom | 10 / 500 | Delivery fee in rupees, charged below the free-delivery threshold |
-| shipAreaName | Bengaluru | Shown on "Deliver to me" |
-| shipCities | Bengaluru, Bangalore | The city dropdown |
-| shipPinPrefixes | 560, 562 | A delivery PIN must start with one of these |
+| shipAreaName | Delhi NCR | Shown on "Deliver to me" |
+| shipCities | Delhi, Noida, Gurugram (Gurgaon), Faridabad | The city dropdown |
+| shipPinPrefixes | 110, 201, 122, 121 | A delivery PIN must start with one of these |
 | holdMinutes | 30 | Items held while a customer pays by UPI |
 | pickupHoldHours | 72 | Cash pickup orders kept aside this long, then released |
 | proofRetentionDays | 90 | Payment screenshots go to the Drive bin after this (Google empties the bin 30 days later) |

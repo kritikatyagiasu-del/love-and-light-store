@@ -9,7 +9,7 @@ A free, phone-first online shop for a small maker of handmade goods (candles, cr
 
 **For customers (phone browser, no app to install)**
 - Browse products by category, with "Only N left" and "Sold out" tags and up to 4 photos per product.
-- Cart and checkout: collect in person (UPI or cash) or delivery within one city (UPI only, no cash on delivery). The city and PIN code are checked, and delivery is free above a set order value.
+- Cart and checkout: collect in person (UPI or cash) or delivery within one area, set up here for Delhi NCR (UPI only, no cash on delivery). The city and PIN code are checked, and delivery is free above a set order value.
 - A required consent tick box with a privacy notice.
 - Pay by UPI in two steps: an "Open my UPI app" button, a QR code and the UPI ID first; then the 12-digit UPI reference number **or** a payment screenshot. "I have paid" stays disabled until proof is given.
 - Items are reserved while the customer pays and while the payment is checked. Unpaid holds and uncollected cash orders are released automatically.

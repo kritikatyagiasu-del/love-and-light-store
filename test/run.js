@@ -55,13 +55,13 @@ ok(boot.store.consentText.includes('My Craft Store') && !boot.store.consentText.
 ok(JSON.stringify(boot).indexOf(pin) < 0 && JSON.stringify(boot).indexOf('store@upi') < 0, 'shop data does not leak the PIN or UPI ID');
 
 // --- order validation
-const base = { items: [{ id: p1, qty: 1 }], mode: 'ship', pay: 'upi', name: 'Asha Verma', phone: '+91 98111 22333', email: 'asha@example.com', address: '45 MG Road, near the park', city: 'Bengaluru', pin: '560001', consent: true };
+const base = { items: [{ id: p1, qty: 1 }], mode: 'ship', pay: 'upi', name: 'Asha Verma', phone: '+91 98111 22333', email: 'asha@example.com', address: '45 Sector 62, near the park', city: 'Noida', pin: '201301', consent: true };
 const place = (o) => W.run('apiPlaceOrder', Object.assign({}, base, o));
 ok(/tick the box/.test(place({ consent: false }).error), 'no consent refused');
 ok(/tick the box/.test(place({ consent: 'yes' }).error), 'consent must be true');
-ok(/Bengaluru/.test(place({ pin: '400001' }).error), 'Mumbai PIN refused');
-ok(/Bengaluru/.test(place({ city: 'Mumbai' }).error), 'city outside the list refused');
-ok(/Bengaluru/.test(place({ pin: '2013' }).error), 'short PIN refused');
+ok(/Delhi NCR/.test(place({ pin: '400001' }).error), 'Mumbai PIN refused');
+ok(/Delhi NCR/.test(place({ city: 'Mumbai' }).error), 'city outside the list refused');
+ok(/Delhi NCR/.test(place({ pin: '2013' }).error), 'short PIN refused');
 ok(/Cash is only/.test(place({ pay: 'cash' }).error), 'cash on delivery refused');
 ok(/mobile/.test(place({ phone: '12' }).error), 'bad phone refused');
 ok(/email/.test(place({ email: 'nope' }).error), 'bad email refused');
@@ -84,7 +84,7 @@ ok(/am=360\.00/.test(o1.upiLink) && /pa=store%40upi/.test(o1.upiLink), 'UPI link
 ok(W.run('apiBoot').products[0].stock === 5, 'stock reserved when the order is placed');
 ok(W.mails.length === 0, 'no email yet for a UPI order');
 let row = W.table('Orders')[0];
-ok(row.phone === '+919811122333' && row.pin === '560001' && typeof row.pin === 'string', 'phone and PIN kept as text');
+ok(row.phone === '+919811122333' && row.pin === '201301' && typeof row.pin === 'string', 'phone and PIN kept as text');
 ok(row.consentAt instanceof Date || !!row.consentAt, 'consent time recorded');
 throws(() => W.run('apiGetOrder', 'short'), /could not find/, 'bad token refused');
 W.advance(4); W.run('tick');
