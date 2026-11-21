@@ -2,6 +2,9 @@
 
 A free, phone-first online shop for a small maker of handmade goods (candles, crafts, gifts). It runs entirely on a free Google account: Google Sheets for data, Apps Script for the app, Google Drive for product photos and payment screenshots, and Gmail for emails. There's no payment gateway, no monthly fee and no server to manage. Customers pay by UPI or cash, and the owner confirms each payment.
 
+**How it was built:** with Claude as the coding assistant. I defined the users and requirements, made the design decisions and ran the tests.
+
+
 ![Customer screens](screenshots/customer.png)
 ![Admin screens](screenshots/admin.png)
 
@@ -64,5 +67,14 @@ npm run test:ui             # build + 44 browser checks, screenshots in test/sho
 - **Photos** are served from Google Drive, which works but is not an officially supported way to host images.
 - **Payments** are confirmed by hand; there's no automatic UPI matching.
 
-## Privacy
-No personal data lives in this code. Customer details, settings, the admin PIN and the UPI ID are stored only in the installer's own Google Sheet and Drive. The default privacy notice is a placeholder; replace it with text reviewed by a lawyer for your country (for India, the DPDP Act).
+## Privacy and DPDP
+No personal data lives in this code. Everything below is stored only in the installer's own Google Sheet and Drive. In India, the DPDP Act's notice, consent, erasure and breach-reporting duties apply from 13 May 2027.
+
+| Area | Today | Open item |
+|---|---|---|
+| Personal data held | Name, phone, email, delivery address, UPI reference or payment screenshot, reviews | None beyond what an order needs |
+| Notice and consent | Required consent tick box at checkout and for reviews | The notice is a placeholder; replace it with text reviewed by a lawyer |
+| Retention | Payment screenshots deleted after a set number of days (default 90) | The Sheet is never deleted from; set a retention period for order data |
+| Correction and erasure | Manual, in the Sheet | Add a request path for customers to correct or delete their data |
+| Reviews | Buyers only, published by the owner, shown as "a verified buyer" if chosen | None |
+| Access | PIN-protected admin page; data in one Google account | Turn on 2-step verification for that account |
